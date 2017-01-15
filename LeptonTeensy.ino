@@ -46,33 +46,32 @@ public:
   }
 
   void read_frame() {
-    const uint8_t bytes_per_packet = kLeptonPacketLen / 2;
+    const uint8_t bytesPerPacket = kLeptonPacketLen / 2;
 
     reset_statistics();
     
     for (int line = 0; line < kLeptonImageHeight; ++line) {
       uint8_t* p = packet;
-      for (int b = 0; b < bytes_per_packet; ++b) {
-  
+      for (int b = 0; b < bytesPerPacket; ++b) {
         digitalWrite(CSPin, LOW);
         
-        //  send in the address and value via SPI:
         *p++ = SPI.transfer(0x00);
         *p++ = SPI.transfer(0x00);
     
         digitalWrite(CSPin, HIGH);
       }
   
-      uint8_t line_number = packet[1];
-      if (line_number != line) {
+      uint8_t lineNumber = packet[1];
+      if (lineNumber != line) {
         --line;
         delayMicroseconds(kMisReadResetDelayUs);
         continue;
       }
   
-      if (line_number < kLeptonImageHeight) {
+      if (lineNumber < kLeptonImageHeight) {
         // Skip 2 byte frame ID, and 2 byte CRC
         uint8_t* p = packet + 4;
+        uint16_t* i = image[lineNumber];
         
         for (int x = 0; x < kLeptonImageWidth; ++x) {
           uint16_t value = *p++ << 8 | *p++;
@@ -82,7 +81,7 @@ public:
           if (value > maxValue)
             maxValue = value;
 
-          image[line_number][x] = value;
+          *i++ = value;
         }
       }
     }
@@ -118,36 +117,36 @@ public:
 
 class heat_palette {
 public:
-  void render_into(CRGB* out_pels, uint16_t numPels, const range_image* image) {
+  void render_into(CRGB* outPels, uint16_t numPels, const range_image* image) {
     const int line = 30;
     
     uint16_t w = image->get_width();
     uint16_t h = image->get_height();
-    const uint16_t* in_pels = image->get_pels() + (line * w);
-    
+    const uint16_t* inPels = image->get_pels() + (line * w);
+
     uint16_t minVal = image->get_range_min();
     uint16_t maxVal = image->get_range_max();
-  
-    for (int x = 0; x < numPels; ++x) {
-      uint8_t index = map(in_pels[x], minVal, maxVal, 0, UINT8_MAX);
-      out_pels[x] = map_color(index);
+
+    for (int x = 0; x < numPels && x < w; ++x) {
+      uint8_t index = map(inPels[x], minVal, maxVal, 0, UINT8_MAX);
+      outPels[x] = map_color(index);
     }
   }
   
 private:
   inline uint32_t map_color(uint8_t index) {
-    uint8_t r = color_map[3 * index];
-    uint8_t g = color_map[3 * index + 1];
-    uint8_t b = color_map[3 * index + 2];
+    uint8_t r = colorMap[3 * index];
+    uint8_t g = colorMap[3 * index + 1];
+    uint8_t b = colorMap[3 * index + 2];
     uint8_t w = 0;
   
    return (uint32_t)((w << 24) | (g << 16) | (r << 8) | b);
   }
 
-  static const uint8_t color_map[];
+  static const uint8_t colorMap[];
 };
 
-const uint8_t heat_palette::color_map[] = {
+const uint8_t heat_palette::colorMap[] = {
   255, 255, 255, 253, 253, 253, 251, 251, 251, 249, 249, 249,
   247, 247, 247, 245, 245, 245, 243, 243, 243, 241, 241, 241, 239, 239, 239, 237, 237,
   237, 235, 235, 235, 233, 233, 233, 231, 231, 231, 229, 229, 229, 227, 227, 227, 225,
