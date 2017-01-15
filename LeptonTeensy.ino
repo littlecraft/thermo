@@ -37,13 +37,18 @@ private:
 
 public:
   lepton_imager() {
+    reset_statistics();
+  }
+
+  inline void reset_statistics() {
     minValue = UINT16_MAX;
     maxValue = 0;
   }
 
-  void read_frame()
-  {
+  void read_frame() {
     const uint8_t bytes_per_packet = kLeptonPacketLen / 2;
+
+    reset_statistics();
     
     for (int line = 0; line < kLeptonImageHeight; ++line) {
       uint8_t* p = packet;
@@ -356,7 +361,7 @@ lepton_imager<kLeptonCSPin> imager;
 heat_palette palette;
 
 const uint8_t kLedPin = 2;
-const uint16_t kPelCount = 80;
+const uint16_t kPelCount = 60;
 CRGB pels[kPelCount];
 
 void setup() {
