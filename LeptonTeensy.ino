@@ -1,6 +1,7 @@
 #include <Wire.h>
 #include <SPI.h>
 #include <FastLED.h>
+#include <cstdint>
 
 #include <pins_arduino.h>
 #include <wiring_private.h>
@@ -16,51 +17,61 @@
 #define SET (0x01)
 #define RUN (0x02)
 
-class lepton_frame {
+typedef struct range_image {
+  virtual const uint16_t* get_pels() const = 0;
+  virtual uint16_t get_width() const = 0;
+  virtual uint16_t get_height() const = 0;
+  virtual uint16_t get_range_min() const = 0;
+  virtual uint16_t get_range_max() const = 0;
+};
+
+template <int CSPin>
+class lepton_imager : public range_image {
 private:
   enum {
     kLeptonPacketLen = 164,
     kLeptonImageWidth = 80,
-    kLeptonImageHeight = 60
+    kLeptonImageHeight = 60,
+    kMisReadResetDelayUs = 1000
   };
 
 public:
-  lepton_frame() {
-    minValue = 65535;
+  lepton_imager() {
+    minValue = UINT16_MAX;
     maxValue = 0;
   }
 
-  void read()
+  void read_frame()
   {
     const uint8_t bytes_per_packet = kLeptonPacketLen / 2;
     
     for (int line = 0; line < kLeptonImageHeight; ++line) {
+      uint8_t* p = packet;
       for (int b = 0; b < bytes_per_packet; ++b) {
   
-        //digitalWrite(10, LOW);
-        PORTB &= ~(1 << 2);
+        digitalWrite(CSPin, LOW);
         
         //  send in the address and value via SPI:
-        packet[2 * b] = SPI.transfer(0x00);
-        packet[2 * b + 1] = SPI.transfer(0x00);
+        *p++ = SPI.transfer(0x00);
+        *p++ = SPI.transfer(0x00);
     
-        // take the SS pin high to de-select the chip:
-        //digitalWrite(10, HIGH);
-        PORTB |= 1 << 2;
-        
+        digitalWrite(CSPin, HIGH);
       }
   
       uint8_t line_number = packet[1];
       if (line_number != line) {
         --line;
-        delayMicroseconds(1000);
+        delayMicroseconds(kMisReadResetDelayUs);
         continue;
       }
   
       if (line_number < kLeptonImageHeight) {
+        // Skip 2 byte frame ID, and 2 byte CRC
+        uint8_t* p = packet + 4;
+        
         for (int x = 0; x < kLeptonImageWidth; ++x) {
-          uint16_t value = packet[2 * x + 4] << 8 | packet[2 * x + 5];
-
+          uint16_t value = *p++ << 8 | *p++;
+          
           if (value < minValue)
             minValue = value;
           if (value > maxValue)
@@ -71,9 +82,29 @@ public:
       }
     }
   }
+
+  const uint16_t* get_pels() const {
+    return (uint16_t*)image;
+  }
+
+  uint16_t get_width() const {
+    return kLeptonImageWidth;
+  }
+
+  uint16_t get_height() const {
+    return kLeptonImageHeight;
+  }
+
+  uint16_t get_range_min() const {
+    return minValue;
+  }
+
+  uint16_t get_range_max() const {
+    return maxValue;
+  }
   
   uint8_t packet[kLeptonPacketLen];
-  uint16_t image[kLeptonImageWidth][kLeptonImageHeight];
+  uint16_t image[kLeptonImageHeight][kLeptonImageWidth];
 
   uint16_t minValue;
   uint16_t maxValue;
@@ -82,20 +113,27 @@ public:
 
 class heat_palette {
 public:
-  void render_into(CRGB* pels, uint16_t numPels, const lepton_frame& frame) {
+  void render_into(CRGB* out_pels, uint16_t numPels, const range_image* image) {
     const int line = 30;
+    
+    uint16_t w = image->get_width();
+    uint16_t h = image->get_height();
+    const uint16_t* in_pels = image->get_pels() + (line * w);
+    
+    uint16_t minVal = image->get_range_min();
+    uint16_t maxVal = image->get_range_max();
   
     for (int x = 0; x < numPels; ++x) {
-      uint8_t index = map(frame.image[line][x], frame.minValue, frame.maxValue, 0, 255);
-      pels[x] = map_color(color_map, index);
+      uint8_t index = map(in_pels[x], minVal, maxVal, 0, UINT8_MAX);
+      out_pels[x] = map_color(index);
     }
   }
   
 private:
-  inline uint32_t map_color(const uint8_t* palette256, uint8_t index) {
-    uint8_t r = palette256[3 * index];
-    uint8_t g = palette256[3 * index + 1];
-    uint8_t b = palette256[3 * index + 2];
+  inline uint32_t map_color(uint8_t index) {
+    uint8_t r = color_map[3 * index];
+    uint8_t g = color_map[3 * index + 1];
+    uint8_t b = color_map[3 * index + 2];
     uint8_t w = 0;
   
    return (uint32_t)((w << 24) | (g << 16) | (r << 8) | b);
@@ -313,7 +351,8 @@ int read_data(uint16_t* buf, int maxLen)
   return payload_length;
 }
 
-lepton_frame frame;
+const uint8_t kLeptonCSPin = 10;
+lepton_imager<kLeptonCSPin> imager;
 heat_palette palette;
 
 const uint8_t kLedPin = 2;
@@ -333,10 +372,6 @@ void setup() {
   SPI.setClockDivider(0);
 
   SPI.begin();
-
-  Serial.println("setup complete");
-
-  delay(1000);
 
   read_reg(0x2);
 
@@ -386,7 +421,7 @@ void setup() {
 }
 
 void loop() {
-  frame.read();
-  palette.render_into(pels, kPelCount, frame);
+  imager.read_frame();
+  palette.render_into(pels, kPelCount, &imager);
   FastLED.show();
 }
